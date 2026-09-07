@@ -1,0 +1,22 @@
+# Environments
+.venv/
+venv/
+ENV/
+
+# Databases and Local Data
+Backend/data/chroma/
+
+# Python caching
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Environment variables and credentials
+.env
+*.json
+!package.json
+!tsconfig.json
+
+# Frontend dependencies
+node_modules/
