@@ -7,7 +7,7 @@ app = FastAPI(
     title="AI Knowledge Library API"
 )
 
-raw_origins = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000")
+raw_origins = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000,https://my-newsletter.web.app")
 origins = [origin.strip() for origin in raw_origins.split(",") if origin.strip()]
 
 app.add_middleware(
