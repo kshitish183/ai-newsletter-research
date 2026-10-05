@@ -78,8 +78,17 @@ def scrape_article(url: str):
 
     soup = BeautifulSoup(text, "html.parser")
 
-    for element in soup(["script", "style", "nav", "footer", "header", "aside", "form"]):
+    for element in soup(["script", "style", "nav", "footer", "header", "aside", "form", "figure", "figcaption", "time"]):
         element.decompose()
+
+    audio_label = re.compile(
+        r"^(?:listen\s+to\s+this\s+article|\d+\s*(?:minute|minutes|second|seconds)\s+listen)\b",
+        re.IGNORECASE,
+    )
+    for element in soup.find_all(["button", "a", "span", "div", "p"]):
+        element_text = element.get_text(" ", strip=True)
+        if len(element_text) <= 120 and audio_label.match(element_text):
+            element.decompose()
 
     title = soup.title.get_text(strip=True) if soup.title else ""
     if not title:
@@ -89,12 +98,37 @@ def scrape_article(url: str):
     if not title:
         title = "Untitled Article"
 
-    paragraphs = soup.find_all("p")
-    content = "\n".join(
-        paragraph.get_text(" ", strip=True)
-        for paragraph in paragraphs
-        if paragraph.get_text(strip=True)
+    raw_paragraphs = soup.find_all("p")
+    cleaned_paragraphs = []
+    
+    NOISE_PREFIXES = (
+        "photo by", "photo:", "image:", "illustration by", "credit:",
+        "getty images", "panos pictures", "listen to this article",
+        "minute listen", "minutes listen"
     )
+
+    for p in raw_paragraphs:
+        p_text = p.get_text(" ", strip=True)
+        if not p_text:
+            continue
+        p_lower = p_text.lower()
+        if re.match(r"^\d+\s*(?:minute|minutes|second|seconds)\s+listen\b", p_lower):
+            continue
+        if any(p_lower.startswith(prefix) for prefix in NOISE_PREFIXES):
+            continue
+        if p_lower.startswith("is ") and ("professor" in p_lower or "researcher" in p_lower or "author" in p_lower or "fellow" in p_lower):
+            continue
+        if "cookie" in p_lower and "privacy" in p_lower:
+            continue
+        cleaned_paragraphs.append(p_text)
+
+    # Deduplicate consecutive identical paragraphs
+    final_paragraphs = []
+    for p in cleaned_paragraphs:
+        if not final_paragraphs or p != final_paragraphs[-1]:
+            final_paragraphs.append(p)
+
+    content = "\n\n".join(final_paragraphs)
 
     if not content or len(content.strip()) < 50:
         body = soup.find("body")
@@ -114,4 +148,4 @@ if __name__ == "__main__":
     test_url = "https://psyche.co/guides/how-to-solve-problems-by-thinking-like-a-detective"
     article = scrape_article(test_url)
     print("\nTITLE:", article["title"])
-    print("\nCONTENT:", article["content"][:200], "...")
+    print("\nCONTENT:", article["content"], "...")
