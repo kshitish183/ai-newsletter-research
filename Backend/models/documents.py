@@ -9,3 +9,14 @@ class Document(BaseModel):
 
 class DocumentURL(BaseModel):
     url: str
+
+
+class QARequest(BaseModel):
+    question: str
+    url: Optional[str] = None
+    title: Optional[str] = None
+    context: Optional[str] = None
+
+
+class QAResponse(BaseModel):
+    answer: str
