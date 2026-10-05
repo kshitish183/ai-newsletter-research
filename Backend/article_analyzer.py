@@ -186,7 +186,7 @@ Rules:
         title=title,
         category="Psyche Guides",
         summary=summary[:8000],
-        main_idea=main_idea[:300],
+        main_idea=main_idea[:800],
         key_insights=key_insights,
         important_concepts=concepts,
         practical_takeaways=takeaways,
