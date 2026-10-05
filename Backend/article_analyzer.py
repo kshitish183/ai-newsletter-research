@@ -9,6 +9,8 @@ load_dotenv()
 
 from google import genai
 from services.scrapper import scrape_article
+from services.chunker import chunk_text
+from services.vector_store import store_chunks, search_chunks
 from models.article import ArticleAnalysis
 
 logger = logging.getLogger("article_analyzer")
@@ -89,6 +91,13 @@ def analyze_article(url: str) -> ArticleAnalysis:
 
     title = article["title"]
     content = article["content"]
+
+    # Index chunks into ChromaDB vector database
+    try:
+        chunks = chunk_text(content)
+        store_chunks(chunks, document_url=url)
+    except Exception as e:
+        logger.warning(f"Failed to store article chunks in vector store: {e}")
 
     prompt = f"""
 You are an AI research assistant.
@@ -191,7 +200,6 @@ def build_smart_fallback_answer(question: str, title: str, context: str) -> str:
     if not paragraphs:
         return f"Regarding '{question}': The article '{title}' does not contain sufficient text."
 
-    # Extract keywords from question
     stop_words = {
         "explain", "in", "simple", "terms", "what", "is", "a", "an", "the",
         "does", "mean", "how", "to", "of", "and", "or", "for", "with", "about",
@@ -228,6 +236,12 @@ def answer_article_question(question: str, url: str = None, title: str = None, c
             scraped = scrape_article(url)
             title = title or scraped["title"]
             context = scraped["content"]
+
+            try:
+                chunks = chunk_text(context)
+                store_chunks(chunks, document_url=url)
+            except Exception as e:
+                logger.warning(f"Failed to store article chunks in vector store: {e}")
         except Exception as e:
             logger.warning(f"Could not retrieve article for Q&A: {e}")
             if not context:
@@ -236,19 +250,32 @@ def answer_article_question(question: str, url: str = None, title: str = None, c
     cleaned_title = title or "Article"
     cleaned_context = context or ""
 
+    # Perform semantic RAG vector retrieval using ChromaDB
+    relevant_chunks = []
+    if url:
+        try:
+            relevant_chunks = search_chunks(question, document_url=url, n_results=3)
+        except Exception as e:
+            logger.warning(f"Vector search failed: {e}")
+
+    rag_passages_str = "\n\n".join(relevant_chunks) if relevant_chunks else ""
+
     prompt = f"""
-You are an AI reading assistant helping a user understand an article.
+You are an AI reading assistant helping a user understand an article using Retrieval-Augmented Generation (RAG).
 
 ARTICLE TITLE: {cleaned_title}
 
-ARTICLE CONTENT:
+MOST RELEVANT SEMANTIC PASSAGES (RAG RETRIEVAL):
+{rag_passages_str if rag_passages_str else 'N/A'}
+
+FULL ARTICLE CONTEXT:
 {cleaned_context}
 
 USER QUESTION:
 {question}
 
 Instructions:
-1. Provide a concise, clear, and direct answer (2-4 sentences) grounded strictly in the provided article content.
+1. Provide a concise, clear, and direct answer (2-4 sentences) grounded strictly in the provided article content and semantic passages.
 2. If the user asks about a concept that is NOT discussed in this article, state clearly that the concept is not covered in this article, and briefly explain what the article *does* cover.
 3. Do not include raw meta-tags, photo credits, or repetitive prefixes.
 """
@@ -264,7 +291,7 @@ Instructions:
 
 if __name__ == "__main__":
     test_url = "https://psyche.co/ideas/what-does-it-mean-to-have-relationship-ambivalence"
-    test_question = 'Explain "Second act / Encore career (critiqued concepts)" in simple terms'
+    test_question = "What is relationship ambivalence?"
     ans = answer_article_question(test_question, url=test_url)
-    print("\n--- TEST ANSWER ---")
+    print("\n--- TEST RAG ANSWER ---")
     print(ans)

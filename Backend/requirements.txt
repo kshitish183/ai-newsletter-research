@@ -9,3 +9,5 @@ google-genai
 chromadb
 sentence-transformers
 torch
+pytest
+httpx

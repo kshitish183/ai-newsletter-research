@@ -1,4 +1,5 @@
 from fastapi import APIRouter, HTTPException
+from starlette.concurrency import run_in_threadpool
 from article_analyzer import analyze_article, answer_article_question
 from models.article import ArticleAnalysis
 from models.documents import Document, DocumentURL, QARequest, QAResponse
@@ -11,42 +12,32 @@ router = APIRouter(
 
 
 @router.post("/url")
-def add_document_from_url(document: DocumentURL) -> Document:
+async def add_document_from_url(document: DocumentURL) -> Document:
     try:
-        data = scrape_article(document.url)
+        data = await run_in_threadpool(scrape_article, document.url)
         return Document(**data)
     except ValueError as e:
-        raise HTTPException(
-            status_code=400,
-            detail=str(e)
-        )
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=str(e)
-        )
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/analyze")
-def analyze_document(document: DocumentURL) -> ArticleAnalysis:
+async def analyze_document(document: DocumentURL) -> ArticleAnalysis:
     try:
-        return analyze_article(document.url)
+        analysis = await run_in_threadpool(analyze_article, document.url)
+        return analysis
     except ValueError as e:
-        raise HTTPException(
-            status_code=400,
-            detail=str(e)
-        )
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=str(e)
-        )
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/ask")
-def ask_question_route(qa: QARequest) -> QAResponse:
+async def ask_question_route(qa: QARequest) -> QAResponse:
     try:
-        answer = answer_article_question(
+        answer = await run_in_threadpool(
+            answer_article_question,
             question=qa.question,
             url=qa.url,
             title=qa.title,
@@ -54,12 +45,6 @@ def ask_question_route(qa: QARequest) -> QAResponse:
         )
         return QAResponse(answer=answer)
     except ValueError as e:
-        raise HTTPException(
-            status_code=400,
-            detail=str(e)
-        )
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=str(e)
-        )
+        raise HTTPException(status_code=500, detail=str(e))
