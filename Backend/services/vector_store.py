@@ -3,7 +3,6 @@ import hashlib
 import logging
 from typing import List, Dict, Any, Optional
 import chromadb
-from sentence_transformers import SentenceTransformer
 
 logger = logging.getLogger("vector_store")
 
@@ -17,6 +16,7 @@ def get_embedding_model():
     if _embedding_model is None:
         try:
             os.environ["TOKENIZERS_PARALLELISM"] = "false"
+            from sentence_transformers import SentenceTransformer
             _embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
         except Exception as e:
             logger.warning(f"Could not load SentenceTransformer embedding model: {e}")
@@ -30,8 +30,11 @@ def get_collection():
         return _collection
 
     try:
-        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        data_dir = os.path.join(base_dir, "data", "chroma")
+        if os.getenv("VERCEL") or os.getenv("LAMBDA_TASK_ROOT"):
+            data_dir = "/tmp/chroma"
+        else:
+            base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            data_dir = os.path.join(base_dir, "data", "chroma")
         os.makedirs(data_dir, exist_ok=True)
         _chroma_client = chromadb.PersistentClient(path=data_dir)
         _collection = _chroma_client.get_or_create_collection(name="articles")
@@ -39,6 +42,7 @@ def get_collection():
     except Exception as e:
         logger.warning(f"Could not initialize ChromaDB PersistentClient: {e}")
         return None
+
 
 
 def get_url_hash(document_url: str) -> str:

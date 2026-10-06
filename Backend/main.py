@@ -1,13 +1,21 @@
 import os
+import sys
 import time
 import uuid
 import logging
 from dotenv import load_dotenv
+
+# Ensure Backend directory is in sys.path when running on Vercel
+backend_dir = os.path.dirname(os.path.abspath(__file__))
+if backend_dir not in sys.path:
+    sys.path.insert(0, backend_dir)
+
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from routers.documents import router as documents_router
 
 load_dotenv()
+
 
 # Configure structured logging format
 logging.basicConfig(
