@@ -18,5 +18,14 @@ class QARequest(BaseModel):
     context: Optional[str] = None
 
 
+class Citation(BaseModel):
+    text: str
+    chunk_index: int
+    score: float
+    url: Optional[str] = None
+
+
 class QAResponse(BaseModel):
     answer: str
+    citations: list[Citation] = []
+

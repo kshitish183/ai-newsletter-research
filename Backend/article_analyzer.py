@@ -10,8 +10,9 @@ load_dotenv()
 from google import genai
 from services.scrapper import scrape_article
 from services.chunker import chunk_text
-from services.vector_store import store_chunks, search_chunks
+from services.vector_store import store_chunks, search_chunks, has_document_chunks, search_chunks_with_citations
 from models.article import ArticleAnalysis
+
 
 logger = logging.getLogger("article_analyzer")
 
@@ -36,24 +37,28 @@ def get_genai_client():
         except Exception as e:
             logger.warning(f"Could not initialize GenAI Client with API key: {e}")
 
-    try:
-        _genai_client = genai.Client(
-            vertexai=True,
-            project=VERTEX_PROJECT,
-            location=VERTEX_LOCATION
-        )
-        logger.info("Initialized GenAI Client with Vertex AI.")
-        return _genai_client
-    except Exception as e:
-        logger.warning(f"Could not initialize GenAI Vertex client: {e}")
-        return None
+    # Only attempt Vertex AI if explicit credentials or flag is provided
+    if os.getenv("GOOGLE_APPLICATION_CREDENTIALS") or os.getenv("USE_VERTEX_AI") == "true":
+        try:
+            _genai_client = genai.Client(
+                vertexai=True,
+                project=VERTEX_PROJECT,
+                location=VERTEX_LOCATION
+            )
+            logger.info("Initialized GenAI Client with Vertex AI.")
+            return _genai_client
+        except Exception as e:
+            logger.warning(f"Could not initialize GenAI Vertex client: {e}")
+
+    return None
+
 
 
 def generate_content_with_fallback(client, prompt: str, is_json: bool = False) -> Optional[str]:
     if not client:
         return None
 
-    candidate_models = [GEMINI_MODEL, "gemini-2.5-flash", "gemini-1.5-flash", "gemini-2.0-flash"]
+    candidate_models = [GEMINI_MODEL, "gemini-2.5-flash", "gemini-1.5-flash"]
     seen = set()
     models_to_try = [m for m in candidate_models if not (m in seen or seen.add(m))]
 
@@ -68,10 +73,15 @@ def generate_content_with_fallback(client, prompt: str, is_json: bool = False) -
             if response and response.text:
                 return response.text.strip()
         except Exception as e:
+            err_msg = str(e).lower()
             logger.warning(f"GenAI generation failed with model '{model}': {e}")
+            if any(term in err_msg for term in ("credential", "auth", "permission", "403", "401", "quota", "project")):
+                logger.warning("Authentication/permission error detected; stopping further model fallbacks.")
+                break
             continue
 
     return None
+
 
 
 def clean_json_response(text: str) -> str:
@@ -230,53 +240,59 @@ def build_smart_fallback_answer(question: str, title: str, context: str) -> str:
         )
 
 
-def answer_article_question(question: str, url: str = None, title: str = None, context: str = None) -> str:
-    if url:
-        try:
-            scraped = scrape_article(url)
-            title = title or scraped["title"]
-            context = scraped["content"]
+def answer_article_question(question: str, url: str = None, title: str = None, context: str = None) -> dict:
+    citations = []
+    cleaned_title = title or "Article"
 
+    # Step 1: Ingest once - check if vector store already has chunks for this URL
+    if url:
+        if not has_document_chunks(url):
             try:
-                chunks = chunk_text(context)
+                logger.info(f"Article not found in vector store. Ingesting once: {url}")
+                scraped = scrape_article(url)
+                cleaned_title = title or scraped.get("title", "Article")
+                scraped_content = scraped.get("content", "")
+                chunks = chunk_text(scraped_content)
                 store_chunks(chunks, document_url=url)
             except Exception as e:
-                logger.warning(f"Failed to store article chunks in vector store: {e}")
-        except Exception as e:
-            logger.warning(f"Could not retrieve article for Q&A: {e}")
-            if not context:
-                raise ValueError("Could not retrieve the article to answer this question.") from e
+                logger.warning(f"Could not ingest article for Q&A: {e}")
+                if not context:
+                    raise ValueError("Could not retrieve or index the article to answer this question.") from e
+        else:
+            logger.info(f"Reusing stored vector chunks for URL: {url}")
 
-    cleaned_title = title or "Article"
-    cleaned_context = context or ""
-
-    # Perform semantic RAG vector retrieval using ChromaDB
-    relevant_chunks = []
-    if url:
+    # Step 2: Retrieve semantic passages & citations from ChromaDB
+    if url or context:
         try:
-            relevant_chunks = search_chunks(question, document_url=url, n_results=3)
+            citations = search_chunks_with_citations(question, document_url=url, n_results=3)
         except Exception as e:
             logger.warning(f"Vector search failed: {e}")
 
-    rag_passages_str = "\n\n".join(relevant_chunks) if relevant_chunks else ""
+    # Fallback to chunking provided context if vector store search yielded no citations
+    if not citations and context:
+        temp_chunks = chunk_text(context)
+        citations = [
+            {"text": c, "chunk_index": idx, "score": 1.0, "url": url}
+            for idx, c in enumerate(temp_chunks[:3])
+        ]
+
+    passages = [c["text"] for c in citations]
+    rag_passages_str = "\n\n".join(passages) if passages else "No relevant passages found."
 
     prompt = f"""
-You are an AI reading assistant helping a user understand an article using Retrieval-Augmented Generation (RAG).
+You are an AI research assistant helping a user understand an article using Retrieval-Augmented Generation (RAG).
 
 ARTICLE TITLE: {cleaned_title}
 
-MOST RELEVANT SEMANTIC PASSAGES (RAG RETRIEVAL):
-{rag_passages_str if rag_passages_str else 'N/A'}
-
-FULL ARTICLE CONTEXT:
-{cleaned_context}
+MOST RELEVANT RETRIEVED SEMANTIC PASSAGES:
+{rag_passages_str}
 
 USER QUESTION:
 {question}
 
 Instructions:
-1. Provide a concise, clear, and direct answer (2-4 sentences) grounded strictly in the provided article content and semantic passages.
-2. If the user asks about a concept that is NOT discussed in this article, state clearly that the concept is not covered in this article, and briefly explain what the article *does* cover.
+1. Provide a concise, clear, and direct answer (2-4 sentences) grounded strictly in the provided retrieved passages.
+2. If the user asks about a concept that is NOT discussed in these passages, state clearly that the concept is not covered in the retrieved text.
 3. Do not include raw meta-tags, photo credits, or repetitive prefixes.
 """
 
@@ -284,9 +300,20 @@ Instructions:
     if client is not None:
         ai_response = generate_content_with_fallback(client, prompt)
         if ai_response:
-            return ai_response
+            return {
+                "answer": ai_response,
+                "citations": citations
+            }
 
-    return build_smart_fallback_answer(question, cleaned_title, cleaned_context)
+    fallback_text = build_smart_fallback_answer(
+        question,
+        cleaned_title,
+        rag_passages_str if rag_passages_str != "No relevant passages found." else (context or "")
+    )
+    return {
+        "answer": fallback_text,
+        "citations": citations
+    }
 
 
 if __name__ == "__main__":
@@ -294,4 +321,5 @@ if __name__ == "__main__":
     test_question = "What is relationship ambivalence?"
     ans = answer_article_question(test_question, url=test_url)
     print("\n--- TEST RAG ANSWER ---")
-    print(ans)
+    print("Answer:", ans["answer"])
+    print("Citations Count:", len(ans["citations"]))

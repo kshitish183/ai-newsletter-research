@@ -46,15 +46,32 @@ def validate_url(url: str):
 
 
 def scrape_article(url: str):
-    validate_url(url)
-
+    current_url = url
+    max_redirects = 5
+    redirect_count = 0
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     }
 
+    response = None
     try:
-        response = requests.get(url, headers=headers, timeout=15, stream=True)
-        response.raise_for_status()
+        session = requests.Session()
+        while redirect_count <= max_redirects:
+            validate_url(current_url)
+            response = session.get(current_url, headers=headers, timeout=15, stream=True, allow_redirects=False)
+
+            if response.is_redirect or response.status_code in (301, 302, 303, 307, 308):
+                redirect_count += 1
+                if redirect_count > max_redirects:
+                    raise ValueError("Too many redirects encountered while fetching article.")
+                location = response.headers.get("Location")
+                if not location:
+                    raise ValueError("Redirect response missing Location header.")
+                current_url = urllib.parse.urljoin(current_url, location)
+                continue
+
+            response.raise_for_status()
+            break
 
         content_length = response.headers.get("Content-Length")
         if content_length and int(content_length) > 5 * 1024 * 1024:
@@ -72,9 +89,11 @@ def scrape_article(url: str):
     except requests.Timeout:
         raise ValueError("Connection timed out while fetching article.")
     except requests.HTTPError as e:
-        raise ValueError(f"HTTP error status {response.status_code} while fetching article: {e}")
+        status_code = response.status_code if response is not None else "Unknown"
+        raise ValueError(f"HTTP error status {status_code} while fetching article: {e}")
     except requests.RequestException as e:
         raise ValueError(f"Failed to fetch article URL: {e}")
+
 
     soup = BeautifulSoup(text, "html.parser")
 
