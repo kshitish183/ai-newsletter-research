@@ -11,7 +11,7 @@ const getApiBaseUrl = (): string => {
   ) {
     return "http://localhost:8000";
   }
-  return "https://ai-newsletter-research.onrender.com";
+  return "https://ai-newsletter-research-production.up.railway.app";
 };
 
 const API_BASE_URL = getApiBaseUrl();
