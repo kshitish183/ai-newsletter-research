@@ -352,7 +352,7 @@ const ArticleViewer: React.FC<ArticleViewerProps> = ({
           {selectedConcept ? `Asking about: ${selectedConcept}` : ""}
         </p>
 
-        <h2 className="sec">Try it yourself</h2>
+        {/* <h2 className="sec">Try it yourself</h2>
         <div className="prog">
           <div className="bar">
             <i id="barfill" style={{ width: `${progressPercent}%` }}></i>
@@ -377,7 +377,7 @@ const ArticleViewer: React.FC<ArticleViewerProps> = ({
               </li>
             );
           })}
-        </ul>
+        </ul> */}
       </main>
 
       <div className="ask">
