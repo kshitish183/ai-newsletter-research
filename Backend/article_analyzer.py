@@ -186,6 +186,11 @@ Rules:
                     if isinstance(data.get(field), str):
                         data[field] = _clean_generated_text(data[field])
                 data["key_insights"] = [_clean_generated_text(x) for x in data.get("key_insights", []) if isinstance(x, str)]
+                placeholder_concepts = {"key framework", "core concept 1", "core concept 2", "concept 1", "concept 2"}
+                data["important_concepts"] = [
+                    concept for concept in data.get("important_concepts", [])
+                    if isinstance(concept, str) and concept.strip().lower() not in placeholder_concepts
+                ]
                 # Reject extractive generations so the deterministic fallback is used.
                 generated = " ".join([data.get("main_idea", ""), data.get("summary", ""), *data["key_insights"]])
                 if _overlap_ratio(generated, content) > 0.8:
@@ -261,10 +266,9 @@ def build_smart_fallback_answer(question: str, title: str, context: str) -> str:
     else:
         concept_match = re.search(r'Explain "(.*?)"', question) or re.search(r'Explain (.*)', question)
         concept_name = concept_match.group(1) if concept_match else question
-        first_meaningful_para = paragraphs[0] if paragraphs else ""
         return (
-            f"The concept '{concept_name}' was not specifically found in the article '{title}'. "
-            f"The article primarily discusses: {first_meaningful_para[:250]}..."
+            f"I couldn't find a passage about '{concept_name}' in the retrieved text from "
+            f"'{title}'. Try asking about a term or idea discussed in the article."
         )
 
 
@@ -295,6 +299,10 @@ def answer_article_question(question: str, url: str = None, title: str = None, c
             citations = search_chunks_with_citations(question, document_url=url, n_results=3)
         except Exception as e:
             logger.warning(f"Vector search failed: {e}")
+
+    # Very weak matches are often unrelated boilerplate. Don't present them as
+    # evidence or cite them as if they support the answer.
+    citations = [citation for citation in citations if citation.get("score", 0) >= 0.2]
 
     # Fallback to chunking provided context if vector store search yielded no citations
     if not citations and context:

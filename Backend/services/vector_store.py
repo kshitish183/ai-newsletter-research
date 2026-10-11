@@ -5,6 +5,7 @@ from typing import List, Dict, Any, Optional
 import chromadb
 
 logger = logging.getLogger("vector_store")
+CHUNK_SCHEMA_VERSION = 2
 
 _embedding_model = None
 _chroma_client = None
@@ -58,9 +59,16 @@ def has_document_chunks(document_url: str) -> bool:
     if collection is None:
         return False
     try:
-        results = collection.get(where={"url": document_url}, limit=1)
-        ids = results.get("ids", [])
-        return len(ids) > 0
+        results = collection.get(
+            where={"url": document_url},
+            include=["metadatas"],
+        )
+        metadatas = results.get("metadatas", [])
+        return any(
+            isinstance(metadata, dict)
+            and metadata.get("chunk_schema_version") == CHUNK_SCHEMA_VERSION
+            for metadata in metadatas
+        )
     except Exception as e:
         logger.warning(f"Error checking document chunks in ChromaDB: {e}")
         return False
@@ -81,7 +89,18 @@ def store_chunks(chunks: list[str], document_url: str):
         embeddings = model.encode(chunks).tolist()
         url_hash = get_url_hash(document_url)
         ids = [f"{url_hash}-{i}" for i in range(len(chunks))]
-        metadatas = [{"url": document_url, "chunk_index": i} for i in range(len(chunks))]
+        metadatas = [
+            {
+                "url": document_url,
+                "chunk_index": i,
+                "chunk_schema_version": CHUNK_SCHEMA_VERSION,
+            }
+            for i in range(len(chunks))
+        ]
+
+        # Replace stale chunks too; otherwise surplus chunks from an older
+        # extraction remain searchable after an article is re-indexed.
+        collection.delete(where={"url": document_url})
 
         collection.upsert(
             ids=ids,
