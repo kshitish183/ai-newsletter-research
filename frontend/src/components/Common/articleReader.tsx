@@ -11,7 +11,7 @@ const getApiBaseUrl = (): string => {
   ) {
     return "http://localhost:8000";
   }
-  return "https://ai-newsletter-research-production.up.railway.app";
+  return "https://insightai-api-6q72nob3na-el.a.run.app";
 };
 
 const API_BASE_URL = getApiBaseUrl();
