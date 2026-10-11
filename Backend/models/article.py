@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import List, Optional
 
 
@@ -11,5 +11,7 @@ class ArticleAnalysis(BaseModel):
     key_insights: List[str]
     important_concepts: List[str]
     practical_takeaways: List[str]
+    concepts: List[dict] = Field(default_factory=list)
+    steps: List[dict] = Field(default_factory=list)
     difficulty: str
     level: Optional[str] = None

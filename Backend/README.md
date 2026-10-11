@@ -98,12 +98,14 @@ pip install -r requirements.txt
 pip install pytest
 ```
 
-### 2. Set Environment Variables (Optional)
-Create a `.env` file in `Backend/`:
+### 2. Set Environment Variables
+Copy `.env.example` to `.env` in `Backend/`, then replace the placeholder with your Gemini API key:
 ```env
-GEMINI_API_KEY=your_gemini_api_key_here
+GEMINI_API_KEY=your_actual_gemini_api_key
+GEMINI_MODEL=gemini-3.8-flash
 ALLOWED_ORIGINS=http://localhost:3000
 ```
+The backend loads this file relative to its own location, regardless of the directory used to start the server. Without Gemini or Vertex AI credentials, analysis returns an unavailable-model fallback instead of generated content.
 
 ### 3. Run Backend Server
 ```bash

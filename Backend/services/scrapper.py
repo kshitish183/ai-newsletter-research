@@ -97,8 +97,16 @@ def scrape_article(url: str):
 
     soup = BeautifulSoup(text, "html.parser")
 
-    for element in soup(["script", "style", "nav", "footer", "header", "aside", "form", "figure", "figcaption", "time"]):
+    for element in soup(["script", "style", "nav", "footer", "header", "aside", "form", "figure", "figcaption", "time", "button", "svg"]):
         element.decompose()
+
+    # Remove common recommendation, sharing, and widget containers before looking
+    # for article text. Class/id values are site controlled, so match conservatively.
+    noise_pattern = re.compile(r"(?:related|recommend|you-may-like|explore-more|newsletter|share|social|widget|audio|listen|comment|subscribe|promo|advert)", re.I)
+    for element in list(soup.find_all(True)):
+        marker = " ".join([str(element.get("id", "")), " ".join(element.get("class", [])), str(element.get("aria-label", ""))])
+        if marker and noise_pattern.search(marker):
+            element.decompose()
 
     audio_label = re.compile(
         r"^(?:listen\s+to\s+this\s+article|\d+\s*(?:minute|minutes|second|seconds)\s+listen)\b",
@@ -117,7 +125,19 @@ def scrape_article(url: str):
     if not title:
         title = "Untitled Article"
 
-    raw_paragraphs = soup.find_all("p")
+    # Prefer semantic article containers; only fall back to the whole document
+    # when a site does not expose one.
+    article_root = soup.find("article") or soup.find("main")
+    if article_root is None:
+        article_root = soup
+    # Drop a trailing recommendation section even when it has no useful class.
+    for heading in list(article_root.find_all(["h2", "h3", "h4"])):
+        if re.search(r"you may like|related (?:articles|stories)|explore more", heading.get_text(" ", strip=True), re.I):
+            node = heading
+            while node is not None:
+                next_node = node.find_next_sibling()
+                node.decompose()
+                node = next_node
     cleaned_paragraphs = []
     
     NOISE_PREFIXES = (
@@ -126,7 +146,7 @@ def scrape_article(url: str):
         "minute listen", "minutes listen"
     )
 
-    for p in raw_paragraphs:
+    for p in article_root.find_all(["h2", "h3", "h4", "p", "li"]):
         p_text = p.get_text(" ", strip=True)
         if not p_text:
             continue
@@ -135,11 +155,13 @@ def scrape_article(url: str):
             continue
         if any(p_lower.startswith(prefix) for prefix in NOISE_PREFIXES):
             continue
+        if len(p_text) < 3 or re.match(r"^(?:\d+\s+of\s+\d+\s+tried|select a concept to focus it|✨?\s*summarize key insights?)\b", p_text, re.I):
+            continue
         if p_lower.startswith("is ") and ("professor" in p_lower or "researcher" in p_lower or "author" in p_lower or "fellow" in p_lower):
             continue
         if "cookie" in p_lower and "privacy" in p_lower:
             continue
-        cleaned_paragraphs.append(p_text)
+        cleaned_paragraphs.append(("## " if p.name in {"h2", "h3", "h4"} else "") + p_text)
 
     # Deduplicate consecutive identical paragraphs
     final_paragraphs = []

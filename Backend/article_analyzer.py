@@ -2,10 +2,11 @@ import os
 import json
 import logging
 import re
+from pathlib import Path
 from typing import Optional
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(Path(__file__).resolve().parent / ".env")
 
 from google import genai
 from services.scrapper import scrape_article
@@ -18,7 +19,7 @@ logger = logging.getLogger("article_analyzer")
 
 VERTEX_PROJECT = os.getenv("VERTEX_PROJECT", "api-newsletter-research")
 VERTEX_LOCATION = os.getenv("VERTEX_LOCATION", "us-central1")
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
 
 _genai_client = None
 
@@ -50,6 +51,10 @@ def get_genai_client():
         except Exception as e:
             logger.warning(f"Could not initialize GenAI Vertex client: {e}")
 
+    logger.warning(
+        "Gemini is unavailable: set GEMINI_API_KEY in Backend/.env or configure "
+        "Vertex AI credentials. Article analysis will use the unavailable-model fallback."
+    )
     return None
 
 
@@ -58,7 +63,7 @@ def generate_content_with_fallback(client, prompt: str, is_json: bool = False) -
     if not client:
         return None
 
-    candidate_models = [GEMINI_MODEL, "gemini-2.5-flash", "gemini-1.5-flash"]
+    candidate_models = [GEMINI_MODEL, "gemini-3.8-flash"]
     seen = set()
     models_to_try = [m for m in candidate_models if not (m in seen or seen.add(m))]
 
@@ -96,6 +101,21 @@ def clean_json_response(text: str) -> str:
     return cleaned
 
 
+def _clean_generated_text(value: str) -> str:
+    boilerplate = re.compile(r"(?:✨?\s*Summarize Key Insights|Explore more by .+|\d+ of \d+ tried|Select a concept to focus it|You may like)", re.I)
+    return boilerplate.sub("", value).strip()
+
+
+def _overlap_ratio(output: str, source: str, n: int = 5) -> float:
+    words = lambda text: re.findall(r"[a-z0-9']+", text.lower())
+    out_words, src_words = words(output), words(source)
+    if len(out_words) < n:
+        return 0.0
+    source_grams = {tuple(src_words[i:i+n]) for i in range(max(0, len(src_words)-n+1))}
+    output_grams = [tuple(out_words[i:i+n]) for i in range(len(out_words)-n+1)]
+    return sum(gram in source_grams for gram in output_grams) / len(output_grams)
+
+
 def analyze_article(url: str) -> ArticleAnalysis:
     article = scrape_article(url)
 
@@ -110,9 +130,7 @@ def analyze_article(url: str) -> ArticleAnalysis:
         logger.warning(f"Failed to store article chunks in vector store: {e}")
 
     prompt = f"""
-You are an AI research assistant.
-
-Analyze the following article and return ONLY valid JSON.
+You are writing a beginner-friendly guide card from the article below. Return ONLY valid JSON.
 
 TITLE:
 {title}
@@ -124,16 +142,22 @@ Use exactly this JSON structure:
 
 {{
     "title": "string",
-    "summary": "A comprehensive, clear article summary of about 250-400 words.",
-    "main_idea": "A clear explanation of the central argument in about 100-150 words.",
+    "summary": "3-4 sentences in plain, warm language, in your own words.",
+    "main_idea": "ONE sentence stating the article's thesis, not an opening anecdote.",
     "key_insights": [
-        "6-8 substantial insights, each explained in 2-3 sentences."
+        "Exactly 4 items, each one sentence making a distilled claim."
+    ],
+    "concepts": [
+        {{"name": "Named idea or theory", "one_line_definition": "Plain-language definition"}}
+    ],
+    "steps": [
+        {{"title": "Exercise step", "what_to_do": "What the reader should do"}}
     ],
     "important_concepts": [
-        "5-7 concise names of important concepts or frameworks."
+        "Short concept labels corresponding to concepts above"
     ],
     "practical_takeaways": [
-        "5-7 specific, actionable takeaways, each explained in 1-3 sentences."
+        "Short actionable steps corresponding to the article's exercises."
     ],
     "difficulty": "Beginner"
 }}
@@ -141,10 +165,11 @@ Use exactly this JSON structure:
 Rules:
 - Return ONLY JSON.
 - Do not use markdown fencing.
-- Follow the requested counts and lengths; provide enough detail to explain the article rather than using short fragments.
-- Cover the article from beginning to conclusion, including its major arguments, supporting evidence, examples, and important qualifications.
+- Do not copy sentences verbatim. Use retrieved/source text only as context for original writing.
+- Synthesize the thesis across the whole article; do not mistake its opening anecdote for its argument.
+- Preserve the article's named theories and its actual exercise structure. If a type of content is absent, return an empty array.
 - Ground every point in the supplied article. Do not invent facts, quotations, or concepts.
-- Exclude website interface text, audio player labels, and listening-duration labels from the analysis.
+- Exclude website interface text, related links, image captions, and listening-duration labels.
 - Keep important concept entries short because they will be displayed as selectable labels.
 - Keep difficulty as Beginner, Intermediate, or Advanced.
 """
@@ -157,6 +182,23 @@ Rules:
                 cleaned_text = clean_json_response(raw_response)
                 data = json.loads(cleaned_text)
 
+                for field in ("summary", "main_idea"):
+                    if isinstance(data.get(field), str):
+                        data[field] = _clean_generated_text(data[field])
+                data["key_insights"] = [_clean_generated_text(x) for x in data.get("key_insights", []) if isinstance(x, str)]
+                # Reject extractive generations so the deterministic fallback is used.
+                generated = " ".join([data.get("main_idea", ""), data.get("summary", ""), *data["key_insights"]])
+                if _overlap_ratio(generated, content) > 0.8:
+                    raise ValueError("Generated analysis is too close to the source text")
+                concepts = data.pop("concepts", [])
+                steps = data.pop("steps", [])
+                data["concepts"] = concepts if isinstance(concepts, list) else []
+                data["steps"] = steps if isinstance(steps, list) else []
+                if concepts and not data.get("important_concepts"):
+                    data["important_concepts"] = [c.get("name", "") for c in concepts if isinstance(c, dict) and c.get("name")]
+                if steps and not data.get("practical_takeaways"):
+                    data["practical_takeaways"] = [f"{s.get('title', '')}: {s.get('what_to_do', '')}" for s in steps if isinstance(s, dict)]
+
                 data["url"] = url
                 if "difficulty" in data and "level" not in data:
                     data["level"] = data["difficulty"]
@@ -168,28 +210,14 @@ Rules:
                 logger.warning(f"Failed to parse JSON from GenAI response: {e}")
 
     # Fallback analysis if Gemini is unavailable or fails
-    paragraphs = [p.strip() for p in content.split("\n") if p.strip()]
-    if len(paragraphs) > 8:
-        summary_paragraphs = [
-            paragraphs[round(index * (len(paragraphs) - 1) / 7)]
-            for index in range(8)
-        ]
-    else:
-        summary_paragraphs = paragraphs
-    summary = "\n\n".join(summary_paragraphs) if summary_paragraphs else "No summary available."
-    main_idea = paragraphs[0] if len(paragraphs) > 0 else summary
-
-    key_insights = paragraphs[1:5] if len(paragraphs) >= 5 else [
-        "Key insight 1 from article content.",
-        "Key insight 2 from article content."
-    ]
-
-    takeaways = paragraphs[5:9] if len(paragraphs) >= 9 else [
-        "Takeaway 1: Review main points.",
-        "Takeaway 2: Apply concepts in practice."
-    ]
-
-    concepts = ["Core Concept 1", "Core Concept 2", "Key Framework"]
+    paragraphs = [p.strip() for p in content.split("\n") if p.strip() and not p.strip().startswith("## ")]
+    # A no-model fallback must be honest and must not present copied paragraphs or
+    # fabricated concepts as an AI synthesis.
+    summary = "An AI summary could not be generated for this article. The extracted article text is available for reading and question answering."
+    main_idea = "An AI-generated thesis is unavailable because the language model could not be reached."
+    key_insights = []
+    takeaways = []
+    concepts = []
 
     return ArticleAnalysis(
         url=url,
