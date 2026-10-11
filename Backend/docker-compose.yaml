@@ -2,8 +2,12 @@ services:
   web:
     build: .
     container_name: ai-newsletter-backend
+    env_file:
+      - .env
     networks:
       - backend-app
+    volumes:
+      - chroma-data:/app/data/chroma
     restart: unless-stopped  
     command: sh -c "uvicorn main:app --reload --port=8000 --host=0.0.0.0"
     ports:
@@ -11,3 +15,5 @@ services:
 networks:
   backend-app:
     driver: bridge
+volumes:
+  chroma-data:

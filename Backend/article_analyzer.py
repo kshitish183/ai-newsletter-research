@@ -327,7 +327,7 @@ USER QUESTION:
 {question}
 
 Instructions:
-1. Provide a concise, clear, and direct answer (2-4 sentences) grounded strictly in the provided retrieved passages.
+1. Provide a concise, clear, and direct answer grounded strictly in the provided retrieved passages.
 2. If the user asks about a concept that is NOT discussed in these passages, state clearly that the concept is not covered in the retrieved text.
 3. Do not include raw meta-tags, photo credits, or repetitive prefixes.
 """
